@@ -1,0 +1,26 @@
+# Maven
+**/target/
+
+# IDE
+**/.idea/
+**/.vscode/
+**/.settings/
+**/.classpath
+**/.project
+
+# Sistema operativo
+**/Thumbs.db
+**/.DS_Store
+
+# Variables y secretos locales
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
+**/*.log
+
+# Certificados con clave privada
+**/src/main/resources/certs/*.p12
+**/*.jks
+**/*.keystore
