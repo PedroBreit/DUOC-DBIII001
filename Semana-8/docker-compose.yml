@@ -1,0 +1,421 @@
+services:
+
+  # ======================================================
+  # POSTGRESQL
+  # ======================================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: semana8-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-banco_xyz}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    networks:
+      - banco-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-banco_xyz}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+
+  # ======================================================
+  # ZOOKEEPER
+  # ======================================================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.4
+    container_name: semana8-zookeeper
+    restart: unless-stopped
+
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # KAFKA
+  # ======================================================
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.4
+    container_name: semana8-kafka
+    restart: unless-stopped
+
+    depends_on:
+      - zookeeper
+
+    ports:
+      - "29092:29092"
+
+    environment:
+      KAFKA_BROKER_ID: 1
+
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: >-
+        PLAINTEXT://0.0.0.0:9092,
+        PLAINTEXT_HOST://0.0.0.0:29092
+
+      KAFKA_ADVERTISED_LISTENERS: >-
+        PLAINTEXT://kafka:9092,
+        PLAINTEXT_HOST://localhost:29092
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: >-
+        PLAINTEXT:PLAINTEXT,
+        PLAINTEXT_HOST:PLAINTEXT
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+    networks:
+      - banco-network
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+
+  # ======================================================
+  # CREACION DE TOPICS
+  # ======================================================
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.4.4
+    container_name: semana8-kafka-init
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    command: >
+      bash -c "
+      kafka-topics
+      --bootstrap-server kafka:9092
+      --create
+      --if-not-exists
+      --topic retiros-solicitados
+      --partitions 3
+      --replication-factor 1
+      &&
+      kafka-topics
+      --bootstrap-server kafka:9092
+      --create
+      --if-not-exists
+      --topic retiros-aprobados
+      --partitions 3
+      --replication-factor 1
+      &&
+      kafka-topics
+      --bootstrap-server kafka:9092
+      --create
+      --if-not-exists
+      --topic retiros-rechazados
+      --partitions 3
+      --replication-factor 1
+      "
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # KAFKA UI
+  # ======================================================
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: semana8-kafka-ui
+    restart: unless-stopped
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    ports:
+      - "8090:8080"
+
+    environment:
+      KAFKA_CLUSTERS_0_NAME: banco-semana8
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # EUREKA SERVER
+  # ======================================================
+
+  eureka-server:
+    build:
+      context: ./eureka-server
+      dockerfile: Dockerfile
+
+    container_name: semana8-eureka
+    restart: unless-stopped
+
+    ports:
+      - "8761:8761"
+
+    environment:
+      SERVER_PORT: 8761
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # CONFIG SERVER
+  # ======================================================
+
+  config-server:
+    build:
+      context: ./config-server
+      dockerfile: Dockerfile
+
+    container_name: semana8-config-server
+    restart: unless-stopped
+
+    ports:
+      - "8888:8888"
+
+    environment:
+      SERVER_PORT: 8888
+      CONFIG_REPO_PATH: file:/config-repo
+
+    volumes:
+      - ./config-repo:/config-repo:ro
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # AUTHORIZATION SERVER OAUTH2
+  # ======================================================
+
+  auth-server:
+    build:
+      context: ./auth-server
+      dockerfile: Dockerfile
+
+    container_name: semana8-auth-server
+    restart: unless-stopped
+
+    ports:
+      - "9000:9000"
+
+    environment:
+      SERVER_PORT: 9000
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-ms-seguridad-client}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-{noop}secret123}
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # BANCO CENTRAL
+  # ======================================================
+
+  banco-central:
+    build:
+      context: ./Banco-central/banco-central-xyz
+      dockerfile: Dockerfile
+
+    container_name: semana8-banco-central
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      kafka:
+        condition: service_healthy
+
+      config-server:
+        condition: service_started
+
+      eureka-server:
+        condition: service_started
+
+      auth-server:
+        condition: service_started
+
+    ports:
+      - "8081:8081"
+
+    environment:
+      SERVER_PORT: 8081
+
+      CONFIG_SERVER_URL: http://config-server:8888
+
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-banco_xyz}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+      JWT_SECRET: ${JWT_SECRET:-semana8-clave-jwt-desarrollo-1234567890}
+
+      AUTH_JWK_SET_URI: http://auth-server:9000/oauth2/jwks
+
+      EUREKA_SERVER_URL: http://eureka-server:8761/eureka/
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+      SQL_INIT_MODE: always
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # BFF CAJEROS
+  # ======================================================
+
+  bff-cajeros:
+    build:
+      context: ./bff-cajeros
+      dockerfile: Dockerfile
+
+    container_name: semana8-bff-cajeros
+    restart: unless-stopped
+
+    depends_on:
+      banco-central:
+        condition: service_started
+
+      kafka:
+        condition: service_healthy
+
+      eureka-server:
+        condition: service_started
+
+    ports:
+      - "8082:8082"
+
+    environment:
+      SERVER_PORT: 8082
+
+      BANCO_CENTRAL_URL: http://banco-central:8081
+
+      EUREKA_SERVER_URL: http://eureka-server:8761/eureka/
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # BFF MOBILE
+  # ======================================================
+
+  bff-mobile:
+    build:
+      context: ./bff-mobile
+      dockerfile: Dockerfile
+
+    container_name: semana8-bff-mobile
+    restart: unless-stopped
+
+    depends_on:
+      banco-central:
+        condition: service_started
+
+      eureka-server:
+        condition: service_started
+
+    ports:
+      - "8083:8083"
+
+    environment:
+      SERVER_PORT: 8083
+
+      BANCO_CENTRAL_URL: http://banco-central:8081
+
+      EUREKA_SERVER_URL: http://eureka-server:8761/eureka/
+
+    networks:
+      - banco-network
+
+
+  # ======================================================
+  # BFF WEB
+  # ======================================================
+
+  bff-web:
+    build:
+      context: ./bff-web
+      dockerfile: Dockerfile
+
+    container_name: semana8-bff-web
+    restart: unless-stopped
+
+    depends_on:
+      banco-central:
+        condition: service_started
+
+      eureka-server:
+        condition: service_started
+
+    ports:
+      - "8084:8084"
+
+    environment:
+      SERVER_PORT: 8084
+
+      BANCO_CENTRAL_URL: http://banco-central:8081
+
+      EUREKA_SERVER_URL: http://eureka-server:8761/eureka/
+
+    networks:
+      - banco-network
+
+
+# =========================================================
+# VOLUMES
+# =========================================================
+
+volumes:
+  postgres-data:
+
+
+# =========================================================
+# NETWORK
+# =========================================================
+
+networks:
+  banco-network:
+    driver: bridge

@@ -1,0 +1,8 @@
+target
+.idea
+.vscode
+.git
+.gitignore
+*.log
+hs_err_pid*
+replay_pid*

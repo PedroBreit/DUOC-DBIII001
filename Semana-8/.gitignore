@@ -1,0 +1,19 @@
+# Maven
+**/target/
+
+# IDE
+**/.idea/
+**/.vscode/
+*.iml
+
+# Logs
+*.log
+hs_err_pid*
+replay_pid*
+
+# Variables locales
+.env
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
